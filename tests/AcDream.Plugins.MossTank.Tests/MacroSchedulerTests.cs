@@ -668,6 +668,69 @@ public class MacroSchedulerTests
         Assert.Equal([false], primary.RunningWrites);
     }
 
+    /// <summary>
+    /// A primary that claimed the turn but was passed over for a fallback was
+    /// never run, yet it may have armed something that keeps acting. When a
+    /// higher rule then takes the turn its lost-turn hook must still fire,
+    /// once. Mutation: fire it only for a rule that was run and it never does.
+    /// </summary>
+    [Fact]
+    public void APreChainPrimaryThatOnlyClaimedTheTurnStillHearsItLostIt()
+    {
+        int lost = 0;
+        var primary = new ControllerMacroRule(
+            "primary",
+            _ => true,
+            onLostTurn: () => lost++);
+        var fallback = new Probe("fallback", valid: true);
+        var chain = new MacroRulePreChain(primary, null, [fallback]);
+        var higher = new Probe("higher");
+        MacroScheduler scheduler = Started(higher, chain);
+
+        scheduler.RunPass(1d);
+        Assert.True(fallback.Running);
+        Assert.Equal(0, lost);
+
+        higher.Valid = true;
+        scheduler.RunPass(1d);
+        scheduler.RunPass(1d);
+
+        Assert.Equal(1, lost);
+    }
+
+    /// <summary>
+    /// The claim outlives a later pass that declines: the primary may still
+    /// have something armed, so the pass that takes the turn away must fire
+    /// its hook, once, and later passes must not repeat it. Mutation: let a
+    /// declining pass clear the claim and the hook never fires.
+    /// </summary>
+    [Fact]
+    public void APreChainPrimaryThatClaimedThenDeclinedStillHearsItLostTheTurn()
+    {
+        int lost = 0;
+        bool claims = true;
+        var primary = new ControllerMacroRule(
+            "primary",
+            _ => claims,
+            onLostTurn: () => lost++);
+        var fallback = new Probe("fallback", valid: true);
+        var chain = new MacroRulePreChain(primary, null, [fallback]);
+        var higher = new Probe("higher");
+        MacroScheduler scheduler = Started(higher, chain);
+
+        scheduler.RunPass(1d);
+        Assert.True(fallback.Running);
+        claims = false;
+        scheduler.RunPass(1d);
+        Assert.Equal(1, lost);
+
+        higher.Valid = true;
+        scheduler.RunPass(1d);
+        scheduler.RunPass(1d);
+
+        Assert.Equal(1, lost);
+    }
+
     [Fact]
     public void PreChainRunsThePrimaryWhenNoFallbackIsValid()
     {

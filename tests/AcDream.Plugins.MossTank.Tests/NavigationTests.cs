@@ -445,6 +445,48 @@ public sealed class NavigationTests
     }
 
     /// <summary>
+    /// A navigate rule inside a pre-chain can win the scheduler's scan and
+    /// still never be run, because a fallback runs in its place. The mover it
+    /// armed while being asked must stop all the same when another rule then
+    /// takes the turn. Mutation: guard the switch-off on the rule having been
+    /// run and the mover keeps steering for the attacker.
+    /// </summary>
+    [Fact]
+    public void ANavigateRuleThatOnlyClaimedTheTurnStopsTheMoverWhenAnotherRuleWinsIt()
+    {
+        PluginNavigationPosition goal = Position(12d / 240d, 0d);
+        var automation = new FakeAutomation
+        {
+            NavigationSnapshot = Snapshot(Position(0d, 0d, heading: 90f)),
+        };
+        NavigationController controller = Controller(
+            automation,
+            RouteMode.Circular,
+            minimumDistanceMeters: 2d,
+            Waypoint(RouteWaypointType.Point, goal));
+        var rule = new ControllerMacroRule(
+            "NavigateRouteIdle",
+            context =>
+            {
+                Assert.True(controller.ClaimFromRulePass(context.CanAct));
+                return true;
+            },
+            onLostTurn: controller.StopForLostTurn);
+
+        Assert.True(rule.ValidNow(new MacroPassContext(0.05d, CanAct: true)));
+        controller.StepArmedMover(0.1d, navigationSlotsAreClear: true);
+        int steered = automation.Intents.Count;
+        Assert.True(steered > 0);
+
+        rule.Running = false;
+        controller.StepArmedMover(0.1d, navigationSlotsAreClear: true);
+        controller.StepArmedMover(0.1d, navigationSlotsAreClear: true);
+
+        Assert.Equal(steered, automation.Intents.Count);
+        Assert.Equal(1, automation.ClearCount);
+    }
+
+    /// <summary>
     /// Skipping moves the cursor as arriving does: a circular route wraps, a
     /// once route that runs out is complete, and a follow route has nothing to
     /// skip. Mutation: skip without wrapping and the circular cursor runs off

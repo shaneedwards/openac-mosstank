@@ -17,6 +17,7 @@ internal sealed class ControllerMacroRule : IMacroRule
     private readonly Func<string?>? _runningDetail;
     private readonly Func<string?>? _declineReason;
     private bool _running;
+    private bool _claimed;
     private bool _gateClosed;
 
     public ControllerMacroRule(
@@ -54,7 +55,13 @@ internal sealed class ControllerMacroRule : IMacroRule
         _gateClosed = !gateOpen;
         if (!gateOpen || !context.CanAct)
             return false;
-        return _tick(new MacroPassContext(context.ElapsedSeconds, CanAct: true));
+        // Sticky until the rule loses the turn: a claim that a later pass
+        // declines may still have left the mover armed, and only a
+        // Running=false switch-off stops it.
+        bool claims = _tick(new MacroPassContext(context.ElapsedSeconds, CanAct: true));
+        if (claims)
+            _claimed = true;
+        return claims;
     }
 
     public bool Running
@@ -62,10 +69,16 @@ internal sealed class ControllerMacroRule : IMacroRule
         get => _running;
         set
         {
-            if (_running == value)
+            // A pre-chain can run a fallback in place of a rule that claimed
+            // the turn, so the rule was asked (and may have armed something)
+            // without ever being run; losing the turn still has to stop it.
+            bool lostTurn = !value && (_running || _claimed);
+            if (!value)
+                _claimed = false;
+            if (_running == value && !lostTurn)
                 return;
             _running = value;
-            if (!value)
+            if (lostTurn)
                 _onLostTurn?.Invoke();
         }
     }
