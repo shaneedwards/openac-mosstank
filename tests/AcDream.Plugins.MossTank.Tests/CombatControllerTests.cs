@@ -5214,6 +5214,85 @@ public sealed class CombatControllerTests
         Assert.False(controller.EquipOneStepForMonster("Fixture"));
         Assert.Equal(801u, surface.LastEquipObjectId);
     }
+    private (FakeAutomation Surface, CombatController Controller)
+        BlockedBowFixture()
+    {
+        var surface = new FakeAutomation
+        {
+            CombatSnapshot = Physical() with { Mode = PluginCombatMode.Peace },
+            CharacterSkills = [new PluginSkillInfo(47u, "Missile Weapons",
+                PluginSkillTraining.Trained, 300u) { Base = 300u }],
+            Targets = [Target(10, "Drudge", 5, 0)],
+            ProjectilePath = new(PluginProjectilePathStatus.Blocked),
+            EquipmentItems =
+            [
+                Equipment(700, "Fire Bow", 0x10, itemType: 0x100u,
+                    equippedLocation: 0x00100000u, ammoType: 1u),
+                Equipment(801, "Deadly Fire Arrow", 0x10, combatUse: 3,
+                    ammoType: 1u, stackSize: 20, validLocations: AmmunitionSlot),
+            ],
+            ItemEntries =
+            [
+                InventoryItem(801, "Deadly Fire Arrow", 0x100u, 0u, false)
+                    with { StackSize = 20 },
+            ],
+        };
+        var settings = new CombatSettings { UseProjectileAwareness = true };
+        settings.CombatItemObjectIds.Add(700u);
+        settings.Rules.Clear();
+        settings.Rules.Add(new MonsterRule("DEFAULT", new MonsterRuleActions
+        {
+            Flags = MonsterActionFlags.Attack,
+            DamageType = MonsterDamageType.Fire,
+            WeaponObjectId = 700u,
+        }));
+        return (surface, new CombatController(new FakeHost(surface), settings,
+            gameInfo: AmmoGameInfo));
+    }
+
+    /// <summary>
+    /// A monster behind a wall must not hold the turn while mode prep is
+    /// still owed: the path is tested against the planned bow before the
+    /// stance change is requested. Mutation: remove the early path check
+    /// before <c>TryPrepareAttack</c>; the pass asks for Missile mode.
+    /// </summary>
+    [Fact]
+    public void BlockedShotYieldsBeforeModePrepClaimsTheTurn()
+    {
+        var (surface, controller) = BlockedBowFixture();
+
+        controller.Toggle();
+        controller.OnTick(0.25);
+
+        Assert.Equal(0, surface.ModeChangeRequests);
+        // The yield re-picks and finds nothing, exactly as the in-mode path
+        // does; the status is the pass's, not mode prep's or the busy gate's.
+        Assert.Equal("Waiting for a target", controller.Status);
+        Assert.False(controller.HasTarget);
+        Assert.Equal(10u, surface.LastProjectileTarget);
+    }
+
+    /// <summary>
+    /// Same, with the inventory busy: a busy gate must not keep the
+    /// unshootable monster holding the turn. Mutation: as above.
+    /// </summary>
+    [Fact]
+    public void BlockedShotYieldsBeforeABusyInventoryClaimsTheTurn()
+    {
+        var (surface, controller) = BlockedBowFixture();
+        surface.CombatSnapshot = Physical() with { Mode = PluginCombatMode.Missile };
+        surface.BusyState = surface.BusyState with { PendingInventory = true };
+
+        controller.Toggle();
+        controller.OnTick(0.25);
+
+        Assert.Equal(0, surface.ModeChangeRequests);
+        // The yield re-picks and finds nothing, exactly as the in-mode path
+        // does; the status is the pass's, not mode prep's or the busy gate's.
+        Assert.Equal("Waiting for a target", controller.Status);
+        Assert.False(controller.HasTarget);
+    }
+
     /// <summary>
     /// Mutation: treat any equipped combat-use-3 item as the quiver or
     /// select the first matching stack; item 801 then hides the larger stack.

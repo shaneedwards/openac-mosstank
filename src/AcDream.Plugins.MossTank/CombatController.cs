@@ -901,6 +901,13 @@ internal sealed class CombatController
             return AttackPassOutcome.Retry;
         }
 
+        // A shot the path cannot reach must not wait behind mode prep or a
+        // busy inventory: those claim the turn every pass while the monster
+        // stays behind its wall. Memoised per pass, so the check below is free.
+        if (PlannedAttackMode(out _) == PluginCombatMode.Missile
+            && YieldIfMissilePathBlocked())
+            return AttackPassOutcome.Retry;
+
         if (!TryPrepareAttack())
         {
             // Equipment that cannot be settled is something to wait on; a
@@ -979,20 +986,8 @@ internal sealed class CombatController
             physicalTarget,
             inventory);
         if (combat.Mode == PluginCombatMode.Missile
-            && !ProjectilePathIsClear(
-                _targetId,
-                PluginProjectilePathKind.Missile,
-                _settings.AttackHeight,
-                out PluginProjectilePathResult missilePath))
-        {
-            Status = ProjectileStatus(missilePath, _targetName);
-            // The shot cannot reach: this monster is not attackable this
-            // pass, so the choice is made again from what is left.
-            ClearActionsForPass(
-                _targetId,
-                MonsterActionFlags.Attack | MonsterActionFlags.Streak);
+            && YieldIfMissilePathBlocked())
             return AttackPassOutcome.Retry;
-        }
         // The power table reads the element the attack actually resolved to,
         // so the bar and the wield plan cannot disagree. With the automatic
         // power off nothing is written to the bar at all: the player's own
@@ -2425,6 +2420,45 @@ internal sealed class CombatController
     /// </summary>
     private bool _attackHasNoUsableWeapon;
 
+    /// <summary>
+    /// The combat mode the planned weapon needs, Magic until an owned item
+    /// backs the plan; <paramref name="plannedWeapon"/> is that item's id, or
+    /// zero when nothing backs it.
+    /// </summary>
+    private PluginCombatMode PlannedAttackMode(out uint plannedWeapon)
+    {
+        plannedWeapon = 0u;
+        if (_plannedWeapon == 0u || !_host.Automation.Equipment.IsAvailable)
+            return PluginCombatMode.Magic;
+        foreach (PluginEquipmentItem item in PassEquipment())
+        {
+            if (item.ObjectId != _plannedWeapon)
+                continue;
+            plannedWeapon = _plannedWeapon;
+            return CombatModeGate.ModeFor(in item);
+        }
+        return PluginCombatMode.Magic;
+    }
+
+    /// <summary>
+    /// A missile shot the path cannot reach: this monster is not attackable
+    /// this pass, so the choice is made again from what is left.
+    /// </summary>
+    private bool YieldIfMissilePathBlocked()
+    {
+        if (ProjectilePathIsClear(
+                _targetId,
+                PluginProjectilePathKind.Missile,
+                _settings.AttackHeight,
+                out PluginProjectilePathResult missilePath))
+            return false;
+        Status = ProjectileStatus(missilePath, _targetName);
+        ClearActionsForPass(
+            _targetId,
+            MonsterActionFlags.Attack | MonsterActionFlags.Streak);
+        return true;
+    }
+
     private bool TryPrepareAttack()
     {
         _attackHasNoUsableWeapon = false;
@@ -2433,19 +2467,7 @@ internal sealed class CombatController
         // still a hard requirement: answering "ready" here would let the pass
         // try to swing or cast out of peace mode and quietly do nothing.
         IEquipmentAutomation equipment = _host.Automation.Equipment;
-        PluginCombatMode wanted = PluginCombatMode.Magic;
-        uint plannedWeapon = 0u;
-        if (_plannedWeapon != 0u && equipment.IsAvailable)
-        {
-            foreach (PluginEquipmentItem item in PassEquipment())
-            {
-                if (item.ObjectId != _plannedWeapon)
-                    continue;
-                wanted = CombatModeGate.ModeFor(in item);
-                plannedWeapon = _plannedWeapon;
-                break;
-            }
-        }
+        PluginCombatMode wanted = PlannedAttackMode(out uint plannedWeapon);
 
         // Nothing in the profile's item list can fight this monster: the
         // walk that picks a weapon found no candidate at all. Wielding a wand
