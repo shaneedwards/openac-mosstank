@@ -5998,6 +5998,89 @@ public sealed class CombatControllerTests
         Assert.Equal("Ready", gate.Status);
     }
 
+    /// <summary>
+    /// ACE sends no combat mode when the body is already in the stance asked
+    /// for, so a server mode that disagrees may never be corrected. The gate
+    /// waits three seconds for the echo and then acts on the client's mode: a
+    /// spell may fizzle if the server had not taken the stance, which beats
+    /// stalling for good.
+    /// </summary>
+    [Fact]
+    public void GateStopsWaitingOnAnUnechoedServerModeThreeSecondsAfterTheRequest()
+    {
+        var surface = new FakeAutomation
+        {
+            CombatSnapshot = Physical() with
+            {
+                Mode = PluginCombatMode.Peace,
+                ServerMode = PluginCombatMode.Peace,
+            },
+            WithholdModeEcho = true,
+            EquipmentItems =
+            [
+                Equipment(
+                    800,
+                    "Recovery Wand",
+                    damageType: 0,
+                    itemType: 0x00008000u,
+                    equippedLocation: 0x00100000u),
+            ],
+        };
+        CombatModeGate gate = Gate(surface);
+
+        gate.AdvancePass(0.1);
+        Assert.False(gate.TryPrepare(PluginCombatMode.Magic));
+        Assert.Equal(1, surface.ModeChangeRequests);
+
+        gate.AdvancePass(2.9);
+        Assert.False(gate.TryPrepare(PluginCombatMode.Magic));
+        Assert.Equal("Entering Magic mode", gate.Status);
+
+        gate.AdvancePass(0.11);
+        Assert.True(gate.TryPrepare(PluginCombatMode.Magic));
+        Assert.Equal("Ready", gate.Status);
+        Assert.Equal(1, surface.ModeChangeRequests);
+    }
+
+    /// <summary>
+    /// The stall seen live: the mode is already right, the server's word is
+    /// stale because ACE does not echo a stance the body is already in, and
+    /// the gate never sent a request. It must still release.
+    /// </summary>
+    [Fact]
+    public void GateReleasesAStaleServerModeWhenNoRequestWasEverSent()
+    {
+        var surface = new FakeAutomation
+        {
+            CombatSnapshot = Physical() with
+            {
+                Mode = PluginCombatMode.Missile,
+                ServerMode = PluginCombatMode.Peace,
+            },
+            WithholdModeEcho = true,
+            EquipmentItems =
+            [
+                Equipment(700, "Fire Bow", 0x10, itemType: 0x100u,
+                    equippedLocation: 0x00100000u, ammoType: 1u),
+            ],
+        };
+        CombatModeGate gate = Gate(surface);
+
+        gate.AdvancePass(0.1);
+        Assert.False(gate.TryPrepare(PluginCombatMode.Missile));
+        Assert.Equal("Entering Missile mode", gate.Status);
+
+        // The clock starts at 0.6 s after Reset, so 0.7 s is on it now and the
+        // three-second bound falls 2.3 s further on.
+        gate.AdvancePass(2.2);
+        Assert.False(gate.TryPrepare(PluginCombatMode.Missile));
+
+        gate.AdvancePass(0.11);
+        Assert.True(gate.TryPrepare(PluginCombatMode.Missile));
+        Assert.Equal("Ready", gate.Status);
+        Assert.Equal(0, surface.ModeChangeRequests);
+    }
+
     [Fact]
     public void GateGivesUpWaitingForTheServersStanceAfterTheConfirmationWindow()
     {

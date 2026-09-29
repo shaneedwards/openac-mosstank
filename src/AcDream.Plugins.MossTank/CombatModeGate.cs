@@ -13,6 +13,14 @@ internal sealed class CombatModeGate : IDisposable
 
     private const double ModeConfirmationSeconds = 0.6d;
 
+    // How long a server mode that disagrees with the client's is waited on.
+    // ACE sends the mode only when it changes, so a body already in the
+    // stance never echoes it and the disagreement would otherwise last
+    // forever. Past this bound we act on the client's mode: a spell may
+    // fizzle if the server had not taken the stance yet, which beats a
+    // permanent stall.
+    private const double ServerModeConfirmationSeconds = 3d;
+
     private const uint WeaponReadyMask = 0x03500000u;
 
     private readonly IPluginHost _host;
@@ -394,7 +402,8 @@ internal sealed class CombatModeGate : IDisposable
     {
         PluginCombatSnapshot snapshot = _host.Automation.Combat.Snapshot;
         if (snapshot.ServerMode != PluginCombatMode.Unknown)
-            return snapshot.ServerMode != snapshot.Mode;
+            return snapshot.ServerMode != snapshot.Mode
+                && _sinceModeRequest < ServerModeConfirmationSeconds;
         _ = EffectiveMode();
         return _modeRequestInFlight
             && _sinceModeRequest < ModeConfirmationSeconds;
